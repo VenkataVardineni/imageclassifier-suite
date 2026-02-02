@@ -51,13 +51,57 @@ python src/training/export_model.py
 python src/api/main.py
 ```
 
+6. (Optional) Start the React frontend:
+```bash
+cd frontend
+npm install
+npm start
+```
+
 Or using Docker:
 ```bash
 docker build -t imageclassifier-suite .
 docker run -p 8000:8000 imageclassifier-suite
 ```
 
+## Frontend UI
+
+A beautiful React frontend is available for easy interaction with the model.
+
+### Setup Frontend
+
+1. Navigate to the frontend directory:
+```bash
+cd frontend
+```
+
+2. Install dependencies:
+```bash
+npm install
+```
+
+3. Start the React development server:
+```bash
+npm start
+```
+
+The UI will open at http://localhost:3000
+
+### Features
+
+- 🖼️ Drag and drop image upload
+- 📊 Real-time prediction display
+- 🎯 Top 3 predictions with confidence scores
+- 📱 Responsive design
+- ✨ Beautiful, modern UI
+
 ## API Usage
+
+### Using the Web UI
+
+Simply open http://localhost:3000 and upload an image through the interface.
+
+### Using cURL
 
 Send a POST request to `/predict` with an image file:
 
