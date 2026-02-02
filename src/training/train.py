@@ -8,8 +8,9 @@ import argparse
 import torch
 import torch.nn as nn
 import torch.optim as optim
-from torch.optim.lr_scheduler import CosineAnnealingLR, StepLR
+from torch.optim.lr_scheduler import CosineAnnealingLR, StepLR, LambdaLR
 from tqdm import tqdm
+import math
 
 import sys
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -18,7 +19,7 @@ from models.cnn import create_model
 from data.dataset import get_cifar10_dataloaders
 
 
-def train_epoch(model, train_loader, criterion, optimizer, device):
+def train_epoch(model, train_loader, criterion, optimizer, device, scheduler=None):
     """Train for one epoch."""
     model.train()
     running_loss = 0.0
@@ -26,7 +27,7 @@ def train_epoch(model, train_loader, criterion, optimizer, device):
     total = 0
     
     pbar = tqdm(train_loader, desc='Training')
-    for inputs, targets in pbar:
+    for batch_idx, (inputs, targets) in enumerate(pbar):
         inputs, targets = inputs.to(device), targets.to(device)
         
         # Forward pass
@@ -36,7 +37,15 @@ def train_epoch(model, train_loader, criterion, optimizer, device):
         
         # Backward pass
         loss.backward()
+        
+        # Gradient clipping for stability
+        torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
+        
         optimizer.step()
+        
+        # Step scheduler if it's a per-step scheduler
+        if scheduler is not None and hasattr(scheduler, 'step'):
+            scheduler.step()
         
         # Statistics
         running_loss += loss.item()
@@ -46,7 +55,7 @@ def train_epoch(model, train_loader, criterion, optimizer, device):
         
         # Update progress bar
         pbar.set_postfix({
-            'loss': f'{running_loss/(len(pbar)+1):.4f}',
+            'loss': f'{running_loss/(batch_idx+1):.4f}',
             'acc': f'{100.*correct/total:.2f}%'
         })
     
@@ -85,9 +94,19 @@ def validate(model, test_loader, criterion, device):
     return epoch_loss, epoch_acc
 
 
+def get_cosine_schedule_with_warmup(optimizer, num_warmup_steps, num_training_steps, num_cycles=0.5):
+    """Create a learning rate schedule with warmup."""
+    def lr_lambda(current_step):
+        if current_step < num_warmup_steps:
+            return float(current_step) / float(max(1, num_warmup_steps))
+        progress = float(current_step - num_warmup_steps) / float(max(1, num_training_steps - num_warmup_steps))
+        return max(0.0, 0.5 * (1.0 + math.cos(math.pi * float(num_cycles) * 2.0 * progress)))
+    return LambdaLR(optimizer, lr_lambda)
+
+
 def main():
     parser = argparse.ArgumentParser(description='Train CIFAR-10 CNN')
-    parser.add_argument('--epochs', type=int, default=50, help='Number of epochs')
+    parser.add_argument('--epochs', type=int, default=100, help='Number of epochs')
     parser.add_argument('--batch-size', type=int, default=128, help='Batch size')
     parser.add_argument('--lr', type=float, default=0.1, help='Learning rate')
     parser.add_argument('--momentum', type=float, default=0.9, help='SGD momentum')
@@ -95,7 +114,10 @@ def main():
     parser.add_argument('--checkpoint-dir', type=str, default='./checkpoints', help='Checkpoint directory')
     parser.add_argument('--resume', type=str, default=None, help='Resume from checkpoint')
     parser.add_argument('--data-dir', type=str, default='./data', help='Data directory')
-    parser.add_argument('--scheduler', type=str, default='cosine', choices=['cosine', 'step'], help='LR scheduler type')
+    parser.add_argument('--scheduler', type=str, default='cosine_warmup', choices=['cosine', 'cosine_warmup', 'step'], help='LR scheduler type')
+    parser.add_argument('--warmup-epochs', type=int, default=5, help='Number of warmup epochs')
+    parser.add_argument('--label-smoothing', type=float, default=0.1, help='Label smoothing factor')
+    parser.add_argument('--dropout', type=float, default=0.3, help='Dropout rate')
     
     args = parser.parse_args()
     
@@ -116,19 +138,33 @@ def main():
     
     # Model
     print('Creating model...')
-    model = create_model(num_classes=10, device=device)
+    model = create_model(num_classes=10, device=device, dropout=args.dropout)
     
-    # Loss and optimizer
-    criterion = nn.CrossEntropyLoss()
+    # Loss with label smoothing
+    if args.label_smoothing > 0:
+        criterion = nn.CrossEntropyLoss(label_smoothing=args.label_smoothing)
+    else:
+        criterion = nn.CrossEntropyLoss()
+    
     optimizer = optim.SGD(
         model.parameters(),
         lr=args.lr,
         momentum=args.momentum,
-        weight_decay=args.weight_decay
+        weight_decay=args.weight_decay,
+        nesterov=True  # Nesterov momentum for better convergence
     )
     
-    # Learning rate scheduler
-    if args.scheduler == 'cosine':
+    # Learning rate scheduler with warmup
+    total_steps = len(train_loader) * args.epochs
+    warmup_steps = len(train_loader) * args.warmup_epochs
+    
+    if args.scheduler == 'cosine_warmup':
+        scheduler = get_cosine_schedule_with_warmup(
+            optimizer, 
+            num_warmup_steps=warmup_steps,
+            num_training_steps=total_steps
+        )
+    elif args.scheduler == 'cosine':
         scheduler = CosineAnnealingLR(optimizer, T_max=args.epochs)
     else:
         scheduler = StepLR(optimizer, step_size=30, gamma=0.1)
@@ -151,16 +187,21 @@ def main():
     print(f'Starting training for {args.epochs} epochs...')
     for epoch in range(start_epoch, args.epochs):
         print(f'\nEpoch {epoch+1}/{args.epochs}')
-        print(f'Learning rate: {scheduler.get_last_lr()[0]:.6f}')
+        current_lr = optimizer.param_groups[0]['lr']
+        print(f'Learning rate: {current_lr:.6f}')
         
         # Train
-        train_loss, train_acc = train_epoch(model, train_loader, criterion, optimizer, device)
+        if args.scheduler == 'cosine_warmup':
+            train_loss, train_acc = train_epoch(model, train_loader, criterion, optimizer, device, scheduler)
+        else:
+            train_loss, train_acc = train_epoch(model, train_loader, criterion, optimizer, device)
         
         # Validate
         val_loss, val_acc = validate(model, test_loader, criterion, device)
         
-        # Update learning rate
-        scheduler.step()
+        # Update learning rate (per epoch for non-warmup schedulers)
+        if args.scheduler != 'cosine_warmup':
+            scheduler.step()
         
         # Save checkpoint
         checkpoint = {

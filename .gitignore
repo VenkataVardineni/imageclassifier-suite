@@ -6,6 +6,7 @@ __pycache__/
 .Python
 env/
 venv/
+.venv/
 ENV/
 build/
 develop-eggs/
@@ -54,4 +55,9 @@ Thumbs.db
 # Logs
 logs/
 *.log
+
+# Outputs
+outputs/
+*.png
+!README.md
 

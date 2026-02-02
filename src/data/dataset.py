@@ -21,12 +21,15 @@ def get_cifar10_dataloaders(batch_size=128, num_workers=2, data_dir='./data'):
         test_loader: DataLoader for test set
     """
     
-    # Data augmentation for training
+    # Enhanced data augmentation for training
     train_transform = transforms.Compose([
         transforms.RandomCrop(32, padding=4),
         transforms.RandomHorizontalFlip(),
+        transforms.ColorJitter(brightness=0.2, contrast=0.2, saturation=0.2, hue=0.1),
+        transforms.RandomRotation(5),
         transforms.ToTensor(),
-        transforms.Normalize((0.4914, 0.4822, 0.4465), (0.2023, 0.1994, 0.2010))
+        transforms.Normalize((0.4914, 0.4822, 0.4465), (0.2023, 0.1994, 0.2010)),
+        transforms.RandomErasing(p=0.3, scale=(0.02, 0.33), ratio=(0.3, 3.3))
     ])
     
     # No augmentation for test/validation
