@@ -62,24 +62,45 @@ def load_model(model_path: str):
 
 def preprocess_image(image: Image.Image) -> torch.Tensor:
     """Preprocess image for model inference."""
-    # Resize to 32x32 (CIFAR-10 input size)
-    image = image.resize((32, 32))
-    
-    # Convert to RGB if needed
-    if image.mode != 'RGB':
-        image = image.convert('RGB')
-    
-    # Convert to numpy array and normalize
-    img_array = np.array(image).astype(np.float32) / 255.0
-    
-    # Normalize using CIFAR-10 statistics
-    mean = np.array([0.4914, 0.4822, 0.4465])
-    std = np.array([0.2023, 0.1994, 0.2010])
-    img_array = (img_array - mean) / std
-    
-    # Convert to tensor and add batch dimension
-    img_tensor = torch.from_numpy(img_array).permute(2, 0, 1).unsqueeze(0)
-    return img_tensor.to(device)
+    try:
+        # Resize to 32x32 (CIFAR-10 input size)
+        try:
+            image = image.resize((32, 32), Image.Resampling.LANCZOS)
+        except AttributeError:
+            # Fallback for older PIL versions
+            image = image.resize((32, 32), Image.LANCZOS)
+        
+        # Convert to RGB if needed (handles RGBA, L, P, etc.)
+        if image.mode != 'RGB':
+            image = image.convert('RGB')
+        
+        # Convert to numpy array and normalize
+        # Explicitly use float32 to avoid MPS float64 issues
+        img_array = np.array(image, dtype=np.float32) / 255.0
+        
+        # Ensure the array has the right shape (H, W, C)
+        if len(img_array.shape) != 3 or img_array.shape[2] != 3:
+            raise ValueError(f"Invalid image shape: {img_array.shape}. Expected (H, W, 3)")
+        
+        # Normalize using CIFAR-10 statistics (explicitly float32)
+        mean = np.array([0.4914, 0.4822, 0.4465], dtype=np.float32)
+        std = np.array([0.2023, 0.1994, 0.2010], dtype=np.float32)
+        img_array = (img_array - mean) / std
+        
+        # Ensure array is still float32 after operations
+        img_array = img_array.astype(np.float32)
+        
+        # Convert to tensor and add batch dimension
+        # Shape: (H, W, C) -> (C, H, W) -> (1, C, H, W)
+        # Explicitly specify dtype as float32
+        img_tensor = torch.from_numpy(img_array).permute(2, 0, 1).unsqueeze(0).float()
+        
+        # Ensure tensor is on the correct device
+        img_tensor = img_tensor.to(device)
+        
+        return img_tensor
+    except Exception as e:
+        raise ValueError(f"Error in image preprocessing: {str(e)}")
 
 
 @app.on_event("startup")
@@ -133,16 +154,34 @@ async def predict(file: UploadFile = File(...)):
     try:
         # Read image file
         contents = await file.read()
-        image = Image.open(BytesIO(contents))
+        
+        if not contents:
+            raise HTTPException(status_code=400, detail="Empty file uploaded")
+        
+        # Try to open the image
+        try:
+            image = Image.open(BytesIO(contents))
+        except Exception as e:
+            raise HTTPException(status_code=400, detail=f"Invalid image file. Please upload a valid image (JPEG, PNG, etc.). Error: {str(e)}")
+        
+        # Verify image was loaded
+        if image is None:
+            raise HTTPException(status_code=400, detail="Failed to load image")
         
         # Preprocess image
-        img_tensor = preprocess_image(image)
+        try:
+            img_tensor = preprocess_image(image)
+        except Exception as e:
+            raise HTTPException(status_code=400, detail=f"Error preprocessing image: {str(e)}")
         
         # Run inference
-        with torch.no_grad():
-            outputs = model(img_tensor)
-            probabilities = F.softmax(outputs, dim=1)
-            confidence, predicted = torch.max(probabilities, 1)
+        try:
+            with torch.no_grad():
+                outputs = model(img_tensor)
+                probabilities = F.softmax(outputs, dim=1)
+                confidence, predicted = torch.max(probabilities, 1)
+        except Exception as e:
+            raise HTTPException(status_code=500, detail=f"Error during inference: {str(e)}")
         
         # Get top 3 predictions
         top3_probs, top3_indices = torch.topk(probabilities, 3)
@@ -162,7 +201,14 @@ async def predict(file: UploadFile = File(...)):
         
         return JSONResponse(content=result)
     
+    except HTTPException:
+        # Re-raise HTTP exceptions as-is
+        raise
     except Exception as e:
+        # Log the full error for debugging
+        import traceback
+        error_trace = traceback.format_exc()
+        print(f"Unexpected error: {error_trace}")
         raise HTTPException(status_code=400, detail=f"Error processing image: {str(e)}")
 
 
