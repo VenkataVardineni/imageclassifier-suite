@@ -13,6 +13,7 @@ from PIL import Image
 import numpy as np
 from fastapi import FastAPI, File, UploadFile, HTTPException
 from fastapi.responses import JSONResponse
+from fastapi.middleware.cors import CORSMiddleware
 import uvicorn
 
 # Add parent directory to path
@@ -23,6 +24,15 @@ from data.dataset import CIFAR10_CLASSES
 
 
 app = FastAPI(title="Image Classifier Suite", version="1.0.0")
+
+# Add CORS middleware for React frontend
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["http://localhost:3000", "http://127.0.0.1:3000"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 # Global model variable
 model = None
