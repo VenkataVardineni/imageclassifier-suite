@@ -28,7 +28,8 @@ wheels/
 *.pt
 *.ckpt
 checkpoints/
-models/
+# Only ignore models/ in root, not src/models/
+/models/
 
 # Jupyter Notebook
 .ipynb_checkpoints
@@ -45,7 +46,8 @@ models/
 Thumbs.db
 
 # Data
-data/
+# Only ignore data/ in root, not src/data/
+/data/
 *.h5
 *.hdf5
 
